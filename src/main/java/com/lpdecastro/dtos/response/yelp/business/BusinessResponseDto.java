@@ -22,13 +22,13 @@ import lombok.NoArgsConstructor;
 public class BusinessResponseDto {
 
     @JsonProperty("id")
-    private Double id;
+    private String id;
 
     @JsonProperty("name")
-    private Integer name;
+    private String name;
 
     @JsonProperty("alias")
-    private Double alias;
+    private String alias;
 
     @JsonProperty("rating")
     private Double rating;
