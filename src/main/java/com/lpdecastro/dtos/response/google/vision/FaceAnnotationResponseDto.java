@@ -30,12 +30,12 @@ public class FaceAnnotationResponseDto {
     @JsonProperty("surpriseLikelihood")
     private String surpriseLikelihood;
 
-    @JsonProperty("underExposedLikelihood")
-    private String underExposedLikelihood;
-
-    @JsonProperty("blurredLikelihood")
-    private String blurredLikelihood;
-
-    @JsonProperty("headwearLikelihood")
-    private String headwearLikelihood;
+    // @JsonProperty("underExposedLikelihood")
+    // private String underExposedLikelihood;
+    //
+    // @JsonProperty("blurredLikelihood")
+    // private String blurredLikelihood;
+    //
+    // @JsonProperty("headwearLikelihood")
+    // private String headwearLikelihood;
 }
