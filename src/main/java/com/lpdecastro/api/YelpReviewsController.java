@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
 import com.lpdecastro.dtos.request.YelpReviewsRequestDto;
-import com.lpdecastro.dtos.response.yelp.business.BusinessSearchResponseDto;
+import com.lpdecastro.dtos.response.YelpReviewsResponseDto;
 import com.lpdecastro.services.YelpReviewsService;
 
 import lombok.extern.slf4j.Slf4j;
@@ -41,7 +41,7 @@ public class YelpReviewsController {
     @GetMapping(path = "/yelp/business/reviews",
             produces = MediaType.APPLICATION_JSON_VALUE)
     @ResponseStatus(HttpStatus.OK)
-    public BusinessSearchResponseDto getYelpReviewsController(
+    public YelpReviewsResponseDto getYelpReviewsController(
             @RequestParam Map<String, String> params) {
 
         YelpReviewsRequestDto reqDto = new YelpReviewsRequestDto(params);

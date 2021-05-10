@@ -1,7 +1,7 @@
 package com.lpdecastro.services;
 
 import com.lpdecastro.dtos.request.YelpReviewsRequestDto;
-import com.lpdecastro.dtos.response.yelp.business.BusinessSearchResponseDto;
+import com.lpdecastro.dtos.response.YelpReviewsResponseDto;
 
 /**
  * @author liandre.p.de.castro
@@ -10,5 +10,5 @@ import com.lpdecastro.dtos.response.yelp.business.BusinessSearchResponseDto;
  */
 public interface YelpReviewsService {
 
-    BusinessSearchResponseDto getBusinessReviews(YelpReviewsRequestDto reqDto);
+    YelpReviewsResponseDto getBusinessReviews(YelpReviewsRequestDto reqDto);
 }
