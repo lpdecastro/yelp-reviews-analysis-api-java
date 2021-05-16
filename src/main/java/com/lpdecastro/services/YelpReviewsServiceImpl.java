@@ -1,28 +1,39 @@
 package com.lpdecastro.services;
 
-import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.converter.json.Jackson2ObjectMapperBuilder;
 import org.springframework.stereotype.Service;
+import org.springframework.web.reactive.function.client.WebClient;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.lpdecastro.config.GoogleApiConfig;
-import com.lpdecastro.config.YelpApiConfig;
 import com.lpdecastro.dtos.request.YelpReviewsRequestDto;
 import com.lpdecastro.dtos.request.google.lang.DocumentRequestDto;
+import com.lpdecastro.dtos.request.google.vision.FeatureRequestDto;
+import com.lpdecastro.dtos.request.google.vision.ImageRequestDto;
+import com.lpdecastro.dtos.request.google.vision.RequestDto;
+import com.lpdecastro.dtos.request.google.vision.RequestsDto;
+import com.lpdecastro.dtos.request.google.vision.SourceRequestDto;
 import com.lpdecastro.dtos.response.AnalysisResponseDto;
 import com.lpdecastro.dtos.response.ReviewWithAnalysisResponseDto;
 import com.lpdecastro.dtos.response.YelpReviewResponseDto;
 import com.lpdecastro.dtos.response.YelpReviewsResponseDto;
 import com.lpdecastro.dtos.response.google.lang.NaturalLanguageResponseDto;
+import com.lpdecastro.dtos.response.google.vision.FaceAnnotationResponseDto;
+import com.lpdecastro.dtos.response.google.vision.VisionResponseDto;
 import com.lpdecastro.dtos.response.yelp.business.BusinessResponseDto;
 import com.lpdecastro.dtos.response.yelp.business.BusinessSearchResponseDto;
 import com.lpdecastro.dtos.response.yelp.reviews.ReviewsResponseDto;
-import com.lpdecastro.utils.WebClientUtility;
+
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.util.function.Tuple2;
 
 /**
  * @author liandre.p.de.castro
@@ -33,107 +44,252 @@ import com.lpdecastro.utils.WebClientUtility;
 public class YelpReviewsServiceImpl implements YelpReviewsService {
 
     @Autowired
-    private YelpApiConfig yelpApiConfig;
+    @Qualifier("yelpApiClient")
+    private WebClient yelpApiClient;
 
     @Autowired
-    private GoogleApiConfig googleVisionApiConfig;
+    @Qualifier("cloudVisionApiClient")
+    private WebClient cloudVisionApiClient;
+
+    @Autowired
+    @Qualifier("naturalLangApiClient")
+    private WebClient naturalLangApiClient;
+
+    private final ObjectMapper jsonMapper = Jackson2ObjectMapperBuilder.json().build();
 
     @Override
     public YelpReviewsResponseDto getBusinessReviews(YelpReviewsRequestDto reqDto) {
 
-        // Logic 1: Business Search
-        WebClientUtility yelpClient = new WebClientUtility(yelpApiConfig.getBaseUrl(), yelpApiConfig.getApiKey());
+        // Part 1 - Sequential API Calls to Yelp Business Search API and Reviews Search API
+        YelpReviewsResponseDto resDto = callYelpApiBusinessSearchMono(reqDto)
+                .zipWhen(bizs -> callYelpApiReviewsSearchMono(bizs, reqDto), this::yelpApiResultCombinator)
+                .toFuture()
+                .join();
 
-        BusinessSearchResponseDto bizs = yelpClient.executeYelpApiBusinessSearchRequest("/search", reqDto);
+        // Part 2 - Generate Cloud Vision API and Natural Language API Request
+        List<RequestsDto> visionApiRequestList = new ArrayList<>();
+        List<List<DocumentRequestDto>> langApiRequestList = new ArrayList<>();
+        mutateVisionAndLangRequest(resDto, visionApiRequestList, langApiRequestList);
 
-        // Logic 2: Get Business Id
-        List<String> bizIds = retrieveBusinessIds(bizs);
+        // Part 3 - Parallel API Calls to Cloud Vision API and Natural Language API
+        return Mono
+                .zip(callVisionApiMono(visionApiRequestList), callLangApiMono(langApiRequestList))
+                .map(objects -> this.visionAndLangApiResultMapper(resDto, objects))
+                .toFuture()
+                .join();
+    }
 
-        // Logic 3: Reviews Search
-        List<ReviewsResponseDto> bizReviews = yelpClient.executeYelpApiReviewsSearchRequest(bizIds, reqDto.getLocale());
+    /**
+     * @param
+     *
+     * @return
+     */
+    private Mono<BusinessSearchResponseDto> callYelpApiBusinessSearchMono(YelpReviewsRequestDto reqDto) {
 
-        // for (ReviewsResponseDto bizReviewsItem : bizReviews) {
-        // // Logic 4: Get Review
-        // List<String> bizReview = retrieveBusinessReviewTexts(bizReviewsItem);
-        //
-        // // Logic 5: Google Analysis
-        // WebClientUtility googleNatLangClient = new WebClientUtility(googleVisionApiConfig.getLanguageBaseUrl(),
-        // googleVisionApiConfig.getApiKey());
-        //
-        // List<NaturalLanguageResponseDto> sentiments = googleNatLangClient.executeGoogleNatLangApiRequest(bizReview);
-        //
-        // }
+        return yelpApiClient.get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/search")
+                        .queryParamIfPresent("term", Optional.ofNullable(reqDto.getTerm()))
+                        .queryParamIfPresent("location", Optional.ofNullable(reqDto.getLocation()))
+                        .queryParamIfPresent("latitude", Optional.ofNullable(reqDto.getLatitude()))
+                        .queryParamIfPresent("longitude", Optional.ofNullable(reqDto.getLongitude()))
+                        .queryParamIfPresent("radius", Optional.ofNullable(reqDto.getRadius()))
+                        .queryParamIfPresent("categories", Optional.ofNullable(reqDto.getCategories()))
+                        .queryParamIfPresent("locale", Optional.ofNullable(reqDto.getLocale()))
+                        .queryParamIfPresent("limit", Optional.of(3)) // retrieve only 3 businesses
+                        .queryParamIfPresent("offset", Optional.ofNullable(reqDto.getOffset()))
+                        .queryParamIfPresent("sort_by", Optional.ofNullable(reqDto.getSortBy()))
+                        .queryParamIfPresent("price", Optional.ofNullable(reqDto.getPrice()))
+                        .queryParamIfPresent("open_now", Optional.ofNullable(reqDto.getOpenNow()))
+                        .queryParamIfPresent("open_at", Optional.ofNullable(reqDto.getOpenAt()))
+                        .queryParamIfPresent("attributes", Optional.ofNullable(reqDto.getAttributes()))
+                        .build())
+                .retrieve()
+                .bodyToMono(BusinessSearchResponseDto.class);
+    }
 
-        // Mapping:
-        List<YelpReviewResponseDto> resList = new ArrayList<>();
+    /**
+     * @param
+     *
+     * @return
+     */
+    private Mono<List<ReviewsResponseDto>> callYelpApiReviewsSearchMono(BusinessSearchResponseDto bizs,
+            YelpReviewsRequestDto reqDto) {
 
-        for (int i = 0; i < bizIds.size(); i++) {
-            YelpReviewResponseDto resItem = new YelpReviewResponseDto();
-            resItem.setName(bizs.getBusinesses().get(i).getName());
+        return Flux
+                .fromIterable(
+                        bizs.getBusinesses().stream().map(BusinessResponseDto::getId).collect(Collectors.toList()))
+                .flatMapSequential(bizId -> yelpApiClient.get()
+                        .uri(uriBuilder -> uriBuilder
+                                .path(String.format("/%s/reviews", bizId))
+                                .queryParamIfPresent("locale", Optional.ofNullable(reqDto.getLocale()))
+                                .build())
+                        .retrieve()
+                        .bodyToMono(ReviewsResponseDto.class))
+                .collectList();
+    }
 
-            // Logic 4: Get Review
-            List<DocumentRequestDto> bizReviewDto = retrieveBusinessReviewTexts(bizReviews.get(i));
+    /**
+     * @param
+     *
+     * @return
+     */
+    private YelpReviewsResponseDto yelpApiResultCombinator(BusinessSearchResponseDto bizs,
+            List<ReviewsResponseDto> reviewsList) {
 
-            List<String> bizReview = bizReviewDto.stream()
-                    .map(bizReviewDtoItem -> {
-                        try {
-                            return new ObjectMapper().writeValueAsString(bizReviewDtoItem);
-                        } catch (JsonProcessingException ex) {
-                            ex.printStackTrace(); // TODO: replaced with LOGGER
-                            throw new RuntimeException(); // TODO: replaced with custom exception
-                        }
-                    })
-                    .collect(Collectors.toList());
+        List<YelpReviewResponseDto> businesses = new ArrayList<>();
 
-            for (String testItem : bizReview) {
-                System.out.println("TESTING IN");
-                System.out.println(testItem);
+        for (int i = 0; i < bizs.getBusinesses().size(); i++) {
+
+            YelpReviewResponseDto business = new YelpReviewResponseDto();
+            business.setName(bizs.getBusinesses().get(i).getName());
+
+            List<ReviewWithAnalysisResponseDto> reviews = new ArrayList<>();
+
+            for (int j = 0; j < reviewsList.get(i).getReviews().size(); j++) {
+                ReviewWithAnalysisResponseDto review = new ReviewWithAnalysisResponseDto();
+                review.setText(reviewsList.get(i).getReviews().get(j).getText());
+                review.setImageUrl(reviewsList.get(i).getReviews().get(j).getUser().getImageUrl());
+
+                reviews.add(review);
             }
 
-            // Logic 5: Google Analysis
-            WebClientUtility googleNatLangClient = new WebClientUtility(googleVisionApiConfig.getLanguageBaseUrl(),
-                    googleVisionApiConfig.getApiKey());
-
-            List<NaturalLanguageResponseDto> sentiments = googleNatLangClient.executeGoogleNatLangApiRequest(bizReview);
-
-            for (NaturalLanguageResponseDto testItem : sentiments) {
-                System.out.println("OUT");
-                System.out.println(testItem);
-            }
-
-            List<ReviewWithAnalysisResponseDto> reviewWithAnalysis = new ArrayList<>();
-            for (int j = 0; j < bizReviews.get(i).getReviews().size(); j++) {
-                ReviewWithAnalysisResponseDto reviewWithAnalysisItem = new ReviewWithAnalysisResponseDto();
-                String text = bizReviews.get(i).getReviews().get(j).getText();
-                URL imageUrl = bizReviews.get(i).getReviews().get(j).getUser().getImageUrl();
-                AnalysisResponseDto analysis = new AnalysisResponseDto();
-                analysis.setSentiments(sentiments.get(j));
-
-                reviewWithAnalysisItem.setText(text);
-                reviewWithAnalysisItem.setImageUrl(imageUrl);
-                reviewWithAnalysisItem.setAnalysis(analysis);
-                reviewWithAnalysis.add(reviewWithAnalysisItem);
-            }
-
-            resItem.setReviews(reviewWithAnalysis);
-            resList.add(resItem);
+            business.setReviews(reviews);
+            businesses.add(business);
         }
 
-        return new YelpReviewsResponseDto(resList);
+        return new YelpReviewsResponseDto(businesses);
     }
 
-    private List<String> retrieveBusinessIds(BusinessSearchResponseDto businessSearch) {
-        return businessSearch.getBusinesses().stream().map(BusinessResponseDto::getId).collect(Collectors.toList());
+    /**
+     * @param
+     *
+     * @return
+     */
+    private void mutateVisionAndLangRequest(YelpReviewsResponseDto resDto,
+            List<RequestsDto> cloudVisionApiRequestList,
+            List<List<DocumentRequestDto>> naturalLangApiRequestList) {
+
+        for (YelpReviewResponseDto business : resDto.getBusinesses()) {
+
+            List<RequestDto> requests = new ArrayList<>();
+            List<DocumentRequestDto> naturalLangApiRequests = new ArrayList<>();
+
+            for (ReviewWithAnalysisResponseDto review : business.getReviews()) {
+                // Configure Vision API Request
+                List<FeatureRequestDto> features = new ArrayList<>();
+                FeatureRequestDto feature = new FeatureRequestDto();
+                feature.setType("FACE_DETECTION");
+                feature.setMaxResults(10);
+                features.add(feature);
+
+                SourceRequestDto source = new SourceRequestDto();
+                source.setImageUri(review.getImageUrl().toString());
+
+                ImageRequestDto image = new ImageRequestDto();
+                image.setSource(source);
+
+                RequestDto request = new RequestDto();
+                request.setImage(image);
+                request.setFeatures(features);
+
+                requests.add(request);
+
+                // Configure Natural Language API Request
+                DocumentRequestDto naturalLangApiRequest = new DocumentRequestDto();
+                naturalLangApiRequest.setType("PLAIN_TEXT");
+                naturalLangApiRequest.setContent(review.getText());
+
+                naturalLangApiRequests.add(naturalLangApiRequest);
+            }
+
+            RequestsDto cloudVisionApiRequest = new RequestsDto(requests);
+            cloudVisionApiRequestList.add(cloudVisionApiRequest);
+
+            naturalLangApiRequestList.add(naturalLangApiRequests);
+        }
     }
 
-    private List<DocumentRequestDto> retrieveBusinessReviewTexts(ReviewsResponseDto bizReview) {
-        return bizReview.getReviews().stream()
-                .map(bizReviewItem -> {
-                    DocumentRequestDto doc = new DocumentRequestDto();
-                    doc.setType("PLAIN_TEXT");
-                    doc.setContent(bizReviewItem.getText());
-                    return doc;
+    /**
+     * @param
+     *
+     * @return
+     */
+    private Mono<List<VisionResponseDto>> callVisionApiMono(List<RequestsDto> cloudVisionApiRequestList) {
+
+        return Flux.fromIterable(cloudVisionApiRequestList)
+                .flatMapSequential(req -> {
+                    try {
+                        return cloudVisionApiClient.post()
+                                .bodyValue(jsonMapper.writeValueAsString(req))
+                                .retrieve()
+                                .bodyToMono(VisionResponseDto.class);
+                    } catch (JsonProcessingException ex) {
+                        // TODO Auto-generated catch block
+                        ex.printStackTrace();
+                        throw new RuntimeException();
+                    }
                 })
-                .collect(Collectors.toList());
+                .collectList();
+    }
+
+    /**
+     * @param
+     *
+     * @return
+     */
+    private Mono<List<List<NaturalLanguageResponseDto>>> callLangApiMono(
+            List<List<DocumentRequestDto>> naturalLangApiRequestList) {
+
+        return Flux.fromIterable(naturalLangApiRequestList)
+                .flatMapSequential(req -> Flux.fromIterable(req)
+                        .flatMapSequential(reqItem -> {
+                            try {
+                                return naturalLangApiClient.post()
+                                        .bodyValue(jsonMapper.writeValueAsString(reqItem))
+                                        .retrieve()
+                                        .bodyToMono(NaturalLanguageResponseDto.class);
+                            } catch (JsonProcessingException ex) {
+                                // TODO Auto-generated catch block
+                                ex.printStackTrace();
+                                throw new RuntimeException();
+                            }
+                        })
+                        .collectList())
+                .collectList();
+    }
+
+    /**
+     * @param
+     *
+     * @return
+     */
+    private YelpReviewsResponseDto visionAndLangApiResultMapper(YelpReviewsResponseDto resDto,
+            Tuple2<List<VisionResponseDto>, List<List<NaturalLanguageResponseDto>>> objects) {
+
+        List<YelpReviewResponseDto> businesses = resDto.getBusinesses();
+
+        for (int i = 0; i < businesses.size(); i++) {
+
+            List<ReviewWithAnalysisResponseDto> reviews = businesses.get(i).getReviews();
+
+            for (int j = 0; j < reviews.size(); j++) {
+
+                List<FaceAnnotationResponseDto> emotions = new ArrayList<>(
+                        objects.getT1().get(i).getResponses().get(j).getFaceAnnotations());
+
+                AnalysisResponseDto analysis = new AnalysisResponseDto();
+                analysis.setEmotions(emotions); // Map Cloud Vision API Result
+                analysis.setSentiments(objects.getT2().get(i).get(j)); // Map Natural Language API Result
+
+                ReviewWithAnalysisResponseDto review = businesses.get(i).getReviews().get(j);
+                review.setAnalysis(analysis);
+
+                reviews.set(j, review);
+                businesses.get(i).setReviews(reviews);
+            }
+            resDto.setBusinesses(businesses);
+        }
+        return resDto;
     }
 }
