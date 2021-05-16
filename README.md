@@ -12,6 +12,7 @@
 <ul>
     <li><strike>Functional Implementation</strike></li>
     <li>Unit Tests</li>
+    <li>Documentation on how to use/run</li>
 </ul>
 
 **REQUEST:**
