@@ -30,7 +30,9 @@ import com.lpdecastro.dtos.response.google.vision.VisionResponseDto;
 import com.lpdecastro.dtos.response.yelp.business.BusinessResponseDto;
 import com.lpdecastro.dtos.response.yelp.business.BusinessSearchResponseDto;
 import com.lpdecastro.dtos.response.yelp.reviews.ReviewsResponseDto;
+import com.lpdecastro.exceptions.YelpReviewsException;
 
+import lombok.extern.slf4j.Slf4j;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.util.function.Tuple2;
@@ -40,8 +42,11 @@ import reactor.util.function.Tuple2;
  *
  * @since 2021/05/05
  */
+@Slf4j
 @Service
 public class YelpReviewsServiceImpl implements YelpReviewsService {
+
+    private static final String LOG_TEMPLATE = "{}::{}() - {}";
 
     @Autowired
     @Qualifier("yelpApiClient")
@@ -105,7 +110,13 @@ public class YelpReviewsServiceImpl implements YelpReviewsService {
                         .queryParamIfPresent("attributes", Optional.ofNullable(reqDto.getAttributes()))
                         .build())
                 .retrieve()
-                .bodyToMono(BusinessSearchResponseDto.class);
+                .bodyToMono(BusinessSearchResponseDto.class)
+                .onErrorResume(ex -> {
+                    LOGGER.error(LOG_TEMPLATE, getClass().getSimpleName(),
+                            Thread.currentThread().getStackTrace()[1].getMethodName(), ex);
+
+                    return Mono.error(new YelpReviewsException("Call to external webservice failed."));
+                });
     }
 
     /**
@@ -125,7 +136,13 @@ public class YelpReviewsServiceImpl implements YelpReviewsService {
                                 .queryParamIfPresent("locale", Optional.ofNullable(reqDto.getLocale()))
                                 .build())
                         .retrieve()
-                        .bodyToMono(ReviewsResponseDto.class))
+                        .bodyToMono(ReviewsResponseDto.class)
+                        .onErrorResume(ex -> {
+                            LOGGER.error(LOG_TEMPLATE, getClass().getSimpleName(),
+                                    Thread.currentThread().getStackTrace()[1].getMethodName(), ex);
+
+                            return Mono.error(new YelpReviewsException("Call to external webservice failed."));
+                        }))
                 .collectList();
     }
 
@@ -223,11 +240,19 @@ public class YelpReviewsServiceImpl implements YelpReviewsService {
                         return cloudVisionApiClient.post()
                                 .bodyValue(jsonMapper.writeValueAsString(req))
                                 .retrieve()
-                                .bodyToMono(VisionResponseDto.class);
+                                .bodyToMono(VisionResponseDto.class)
+                                .onErrorResume(ex -> {
+                                    LOGGER.error(LOG_TEMPLATE, getClass().getSimpleName(),
+                                            Thread.currentThread().getStackTrace()[1].getMethodName(), ex);
+
+                                    return Mono.error(new YelpReviewsException("Call to external webservice failed."));
+                                });
+
                     } catch (JsonProcessingException ex) {
-                        // TODO Auto-generated catch block
-                        ex.printStackTrace();
-                        throw new RuntimeException();
+                        LOGGER.error(LOG_TEMPLATE, getClass().getSimpleName(),
+                                Thread.currentThread().getStackTrace()[1].getMethodName(), ex);
+
+                        throw new YelpReviewsException(ex.getLocalizedMessage());
                     }
                 })
                 .collectList();
@@ -248,11 +273,20 @@ public class YelpReviewsServiceImpl implements YelpReviewsService {
                                 return naturalLangApiClient.post()
                                         .bodyValue(jsonMapper.writeValueAsString(reqItem))
                                         .retrieve()
-                                        .bodyToMono(NaturalLanguageResponseDto.class);
+                                        .bodyToMono(NaturalLanguageResponseDto.class)
+                                        .onErrorResume(ex -> {
+                                            LOGGER.error(LOG_TEMPLATE, getClass().getSimpleName(),
+                                                    Thread.currentThread().getStackTrace()[1].getMethodName(), ex);
+
+                                            return Mono.error(
+                                                    new YelpReviewsException("Call to external webservice failed."));
+                                        });
+
                             } catch (JsonProcessingException ex) {
-                                // TODO Auto-generated catch block
-                                ex.printStackTrace();
-                                throw new RuntimeException();
+                                LOGGER.error(LOG_TEMPLATE, getClass().getSimpleName(),
+                                        Thread.currentThread().getStackTrace()[1].getMethodName(), ex);
+
+                                throw new YelpReviewsException(ex.getLocalizedMessage());
                             }
                         })
                         .collectList())
