@@ -5,6 +5,8 @@ package com.lpdecastro.dtos.response;
 
 import java.util.List;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -19,5 +21,6 @@ import lombok.NoArgsConstructor;
 @Data
 public class YelpReviewsResponseDto {
 
-    private List<YelpReviewResponseDto> test;
+    @JsonProperty("businesses")
+    private List<YelpReviewResponseDto> businesses;
 }
